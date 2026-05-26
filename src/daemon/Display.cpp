@@ -215,6 +215,14 @@ namespace DDM {
     void Display::login(QLocalSocket *socket,
                         const QString &user, const QString &password,
                         const Session &session) {
+        qWarning() << "[Display] login request seat=" << name
+                   << " user=" << user
+                   << " session=" << session.fileName()
+                   << " type=" << session.xdgSessionType()
+                   << " singleMode=" << session.isSingleMode();
+        qWarning() << "[Display] login entry state seat=" << name
+                   << " userEmpty=" << user.isEmpty()
+                   << " authCount=" << auths.size();
         if (user == QLatin1String("dde")) {
             qWarning() << "Login attempt for user dde";
             emit loginFailed(socket, user);
@@ -235,8 +243,13 @@ namespace DDM {
         if (!auth)
             auth = new Auth(this, user);
 
+        qWarning() << "[Display] login auth prepared seat=" << name
+                   << " user=" << user
+                   << " authAuthenticated=" << auth->authenticated
+                   << " authTty=" << auth->tty;
         if (auth->authenticated) {
-            qWarning() << "Existing authentication ongoing, aborting";
+            qWarning() << "[Display] Existing authentication ongoing for user" << user
+                       << " state auths=" << auths.size();
             return;
         }
 
@@ -259,6 +272,7 @@ namespace DDM {
             auth->tty = VirtualTerminal::setUpNewVt();
         else
             auth->tty = terminalId;
+        qWarning() << "[Display] Selected tty" << auth->tty << "for user" << user;
         if (!auth->authenticate(password.toLocal8Bit())) {
             Q_EMIT loginFailed(socket, user);
             return;
@@ -387,6 +401,10 @@ namespace DDM {
     }
 
     void Display::unlock(QLocalSocket *socket, const QString &user, const QString &password) {
+        qWarning() << "[Display] unlock request seat=" << name << " user=" << user;
+        qWarning() << "[Display] unlock entry state seat=" << name
+                   << " userEmpty=" << user.isEmpty()
+                   << " authCount=" << auths.size();
         if (user == QLatin1String("dde")) {
             emit loginFailed(socket, user);
             return;
@@ -415,6 +433,9 @@ namespace DDM {
         // Find the auth that started the session, which contains full informations
         for (auto *auth : std::as_const(auths)) {
             if (auth->user == user && auth->xdgSessionId > 0) {
+                qWarning() << "[Display] Found active session for user" << user
+                           << " xdgSessionId=" << auth->xdgSessionId
+                           << " tty=" << auth->tty;
                 OrgFreedesktopLogin1ManagerInterface manager(Logind::serviceName(),
                                                              Logind::managerPath(),
                                                              QDBusConnection::systemBus());
@@ -424,7 +445,8 @@ namespace DDM {
                 return;
             }
         }
-        qWarning() << "No active session found for user" << user;
+        qWarning() << "[Display] No active session found for user" << user
+                   << " authCount=" << auths.size();
         Q_EMIT loginFailed(socket, user);
     }
 }

@@ -20,6 +20,7 @@
 
 #include <QDebug>
 #include <QString>
+#include <qlogging.h>
 
 #include "VirtualTerminal.h"
 
@@ -81,6 +82,8 @@ namespace DDM {
 
         std::function<void()> onAcquireFunction = nullptr;
         std::function<void()> onReleaseFunction = nullptr;
+        static SignalHandler *vtSignalHandler = nullptr;
+        static QMetaObject::Connection vtSignalConnection;
 
         static void onVtSignal(int signal) {
             if (signal == RELEASE_DISPLAY_SIGNAL) {
@@ -106,6 +109,7 @@ namespace DDM {
             vt_mode setModeRequest { };
             bool ok = true;
 
+            qWarning() << "[VT] handleVtSwitches fd=" << fd;
             setModeRequest.mode = VT_PROCESS;
             setModeRequest.relsig = RELEASE_DISPLAY_SIGNAL;
             setModeRequest.acqsig = ACQUIRE_DISPLAY_SIGNAL;
@@ -113,11 +117,21 @@ namespace DDM {
             if (ioctl(fd, VT_SETMODE, &setModeRequest) < 0) {
                 qDebug() << "Failed to manage VT manually:" << strerror(errno);
                 ok = false;
+            } else {
+                qWarning() << "[VT] VT_SETMODE configured";
             }
 
-            daemonApp->signalHandler()->addCustomSignal(RELEASE_DISPLAY_SIGNAL);
-            daemonApp->signalHandler()->addCustomSignal(ACQUIRE_DISPLAY_SIGNAL);
-            QObject::connect(daemonApp->signalHandler(), &SignalHandler::customSignalReceived, onVtSignal);
+            SignalHandler *signalHandler = daemonApp->signalHandler();
+            if (vtSignalHandler != signalHandler) {
+                QObject::disconnect(vtSignalConnection);
+                signalHandler->addCustomSignal(RELEASE_DISPLAY_SIGNAL);
+                signalHandler->addCustomSignal(ACQUIRE_DISPLAY_SIGNAL);
+                vtSignalConnection = QObject::connect(signalHandler, &SignalHandler::customSignalReceived, onVtSignal);
+                vtSignalHandler = signalHandler;
+                qWarning() << "[VT] Installed VT signal dispatcher";
+            } else {
+                qWarning() << "[VT] VT signal dispatcher already installed";
+            }
 
             return ok;
         }
@@ -172,6 +186,7 @@ out:
 
         int currentVt()
         {
+            qWarning() << "[VT] currentVt query";
             int fd = open(defaultVtPath, O_RDWR | O_NOCTTY);
             if (fd < 0) {
                 qCritical() << "Failed to open VT master:" << strerror(errno);
@@ -187,6 +202,7 @@ out:
 
         int setUpNewVt() {
             // open VT master
+            qWarning() << "[VT] setUpNewVt";
             int fd = open(defaultVtPath, O_RDWR | O_NOCTTY);
             if (fd < 0) {
                 qCritical() << "Failed to open VT master:" << strerror(errno);
@@ -201,6 +217,7 @@ out:
                 qCritical() << "Failed to open new VT:" << strerror(errno);
                 return -1;
             }
+            qWarning() << "[VT] VT_OPENQRY result" << vt;
 
             // fallback to active VT
             if (vt <= 0) {
@@ -213,16 +230,24 @@ out:
         }
 
         void jumpToVt(int vt, bool vt_auto, bool wait) {
-            qDebug() << "Jumping to VT" << vt;
+            qWarning().nospace() << "[VT] jumpToVt request vt=" << vt
+                                 << " vt_auto=" << vt_auto
+                                 << " wait=" << wait;
 
             int fd;
 
             int activeVtFd = open(defaultVtPath, O_RDWR | O_NOCTTY);
+            if (activeVtFd < 0) {
+                qWarning() << "[VT] Failed to open VT master:" << strerror(errno);
+                return;
+            }
+            qWarning() << "[VT] opened VT master fd=" << activeVtFd;
 
             QString ttyString = path(vt);
             int vtFd = open(qPrintable(ttyString), O_RDWR | O_NOCTTY);
             if (vtFd != -1) {
                 fd = vtFd;
+                qWarning() << "[VT] Opened target VT device" << ttyString;
 
                 // Clear VT
                 static const char *clearEscapeSequence = "\33[H\33[2J";
@@ -248,8 +273,10 @@ out:
             // If vt_auto is true, the controlling process is already gone, so there is no
             // process which could send the VT_RELDISP 1 ioctl to release the vt.
             // Let the kernel switch vts automatically
-            if (!vt_auto)
+            if (!vt_auto) {
+                qWarning() << "[VT] enabling manual VT switch handling";
                 handleVtSwitches(fd);
+            }
 
             do {
                 errno = 0;

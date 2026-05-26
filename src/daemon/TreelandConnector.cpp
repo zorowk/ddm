@@ -30,6 +30,22 @@ namespace DDM {
 // Virtural Terminal helper from VirturalTerminal.h
 
 static const char *defaultVtPath = "/dev/tty0";
+static bool vtReleasePending = false;
+
+static void completeVtRelease() {
+    int fd = open(defaultVtPath, O_RDWR | O_NOCTTY);
+    if (fd < 0) {
+        qDebug("Failed to open VT master for release: %s", strerror(errno));
+        vtReleasePending = false;
+        return;
+    }
+    if (ioctl(fd, VT_RELDISP, 1) < 0)
+        qDebug("Failed to release VT: %s", strerror(errno));
+    else
+        qDebug() << "[TreelandConnector] Completed pending VT release";
+    close(fd);
+    vtReleasePending = false;
+}
 
 static bool isVtRunningTreeland(int vtnr) {
     for (Display *display : daemonApp->seatManager()->displays) {
@@ -51,11 +67,13 @@ static bool isVtRunningTreeland(int vtnr) {
  */
 static void renderDisabled([[maybe_unused]] void *data, struct wl_callback *callback, [[maybe_unused]] uint32_t serial) {
     wl_callback_destroy(callback);
+    if (!vtReleasePending) {
+        qDebug() << "[TreelandConnector] Ignore render callback without pending VT release";
+        return;
+    }
 
     // Acknowledge kernel to release display
-    int fd = open(defaultVtPath, O_RDWR | O_NOCTTY);
-    ioctl(fd, VT_RELDISP, 1);
-    close(fd);
+    completeVtRelease();
 
     // Get active VT by reading /sys/class/tty/tty0/active .
     // Note that we cannot use open(defaultVtPath, ...) here, as the open() will
@@ -123,7 +141,17 @@ static void onAcquireDisplay() {
 }
 
 static void onReleaseDisplay() {
+    if (vtReleasePending) {
+        qDebug() << "[TreelandConnector] VT release is already pending";
+        return;
+    }
+    vtReleasePending = true;
     auto callback = daemonApp->treelandConnector()->disableRender();
+    if (!callback) {
+        qDebug() << "[TreelandConnector] No render callback, release VT directly";
+        completeVtRelease();
+        return;
+    }
     wl_callback_add_listener(callback, &renderDisabledListener, nullptr);
 }
 
@@ -230,6 +258,10 @@ void TreelandConnector::disconnect() {
         m_display = nullptr;
     }
     m_ddm = nullptr;
+    if (vtReleasePending) {
+        qDebug() << "[TreelandConnector] Connection closed while VT release is pending";
+        completeVtRelease();
+    }
 }
 
 // Request wrapper
