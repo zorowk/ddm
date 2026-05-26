@@ -181,9 +181,20 @@ namespace DDM {
 
     const QString DisplayManager::findUserByVt(int vtnr) {
         for (auto session : m_sessions) {
-            if (vtnr == session->VTNr())
+            if (vtnr == session->VTNr() && session->User() != QStringLiteral("dde")) {
+                qDebug() << "[DisplayManager] findUserByVt selected user session vtnr="
+                           << vtnr << " user=" << session->User();
                 return session->User();
+            }
         }
+        for (auto session : m_sessions) {
+            if (vtnr == session->VTNr()) {
+                qDebug() << "[DisplayManager] findUserByVt selected greeter session vtnr="
+                           << vtnr << " user=" << session->User();
+                return session->User();
+            }
+        }
+        qDebug() << "[DisplayManager] findUserByVt found no session for vtnr=" << vtnr;
         return QString();
     }
 
